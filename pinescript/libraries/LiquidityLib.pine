@@ -1,0 +1,246 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © VWAP-SLH Project
+
+//@version=6
+
+// @description Library for managing liquidity zones, lines, and labels
+library("LiquidityLib")
+
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
+// @type LiquidityZone represents a single liquidity level
+// @field price Price level of liquidity
+// @field startBar Bar index where zone was created
+// @field isHigh True if resistance (sell liquidity), false if support (buy liquidity)
+// @field line Line object
+// @field label Label object
+// @field isActive True if zone is still active
+// @field confirmationLine Optional confirmation line
+// @field confirmationLabel Optional confirmation label
+export type LiquidityZone
+    float price
+    int startBar
+    bool isHigh
+    line line
+    label label
+    bool isActive
+    line confirmationLine
+    label confirmationLabel
+
+// @type LiquidityManager manages multiple liquidity zones
+// @field zones Array of liquidity zones
+// @field maxZones Maximum number of active zones
+export type LiquidityManager
+    array<LiquidityZone> zones
+    int maxZones
+
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
+
+// @function Creates a new liquidity manager
+// @param maxZones Maximum number of active zones to track
+// @returns LiquidityManager object
+export init(int maxZones = 10) =>
+    LiquidityManager.new(
+        zones = array.new<LiquidityZone>(0),
+        maxZones = maxZones
+    )
+
+// ============================================================================
+// ZONE CREATION
+// ============================================================================
+
+// @function Creates a new liquidity zone
+// @param manager LiquidityManager object
+// @param price Price level of liquidity
+// @param startBar Starting bar index
+// @param pivotBar Bar index of the pivot point
+// @param isHigh True for resistance, false for support
+// @param label Text for the label
+// @param color Color for the line and label
+// @returns LiquidityZone object
+export method createZone(LiquidityManager manager, float price, int startBar, int pivotBar, bool isHigh, string labelText, color lineColor) =>
+    // Check if we've reached max zones, remove oldest if needed
+    if array.size(manager.zones) >= manager.maxZones
+        oldestZone = array.shift(manager.zones)
+        if not na(oldestZone.line)
+            line.delete(oldestZone.line)
+        if not na(oldestZone.label)
+            label.delete(oldestZone.label)
+        if not na(oldestZone.confirmationLine)
+            line.delete(oldestZone.confirmationLine)
+        if not na(oldestZone.confirmationLabel)
+            label.delete(oldestZone.confirmationLabel)
+
+    // Create line from pivot to current bar
+    newLine = line.new(
+        x1 = pivotBar,
+        y1 = price,
+        x2 = startBar,
+        y2 = price,
+        color = lineColor,
+        width = 1,
+        extend = extend.right
+    )
+
+    // Create label at current bar
+    newLabel = label.new(
+        x = startBar,
+        y = price,
+        text = labelText,
+        textcolor = lineColor,
+        style = label.style_none,
+        size = size.small
+    )
+
+    // Create zone object
+    zone = LiquidityZone.new(
+        price = price,
+        startBar = startBar,
+        isHigh = isHigh,
+        line = newLine,
+        label = newLabel,
+        isActive = true,
+        confirmationLine = line(na),
+        confirmationLabel = label(na)
+    )
+
+    // Add to manager
+    array.push(manager.zones, zone)
+    zone
+
+// ============================================================================
+// ZONE MANAGEMENT
+// ============================================================================
+
+// @function Updates label position to current bar
+// @param zone LiquidityZone object
+// @returns void
+export method updateLabelPosition(LiquidityZone zone) =>
+    if not na(zone.label) and zone.isActive
+        label.set_x(zone.label, bar_index)
+
+// @function Updates confirmation label position to current bar
+// @param zone LiquidityZone object
+// @returns void
+export method updateConfirmationLabel(LiquidityZone zone) =>
+    if not na(zone.confirmationLabel)
+        label.set_x(zone.confirmationLabel, bar_index)
+
+// @function Adds confirmation line to a liquidity zone
+// @param zone LiquidityZone object
+// @param price Confirmation price level
+// @param barIndex Bar where confirmation occurred
+// @param labelText Text for confirmation label
+// @param color Color for confirmation line/label
+// @returns void
+export method addConfirmation(LiquidityZone zone, float price, int barIndex, string labelText, color lineColor) =>
+    if na(zone.confirmationLine)
+        zone.confirmationLine := line.new(
+            x1 = barIndex,
+            y1 = price,
+            x2 = bar_index,
+            y2 = price,
+            color = lineColor,
+            width = 1,
+            extend = extend.right
+        )
+
+        zone.confirmationLabel := label.new(
+            x = barIndex,
+            y = price,
+            text = labelText,
+            textcolor = lineColor,
+            style = label.style_none,
+            size = size.small
+        )
+
+// @function Deactivates a liquidity zone (stops extending lines)
+// @param zone LiquidityZone object
+// @returns void
+export method deactivate(LiquidityZone zone) =>
+    if zone.isActive
+        zone.isActive := false
+
+        // Stop extending main line
+        if not na(zone.line)
+            line.set_extend(zone.line, extend.none)
+            line.set_x2(zone.line, bar_index)
+
+        // Stop extending confirmation line
+        if not na(zone.confirmationLine)
+            line.set_extend(zone.confirmationLine, extend.none)
+            line.set_x2(zone.confirmationLine, bar_index)
+
+// ============================================================================
+// ZONE INTERACTION DETECTION
+// ============================================================================
+
+// @function Checks if price has touched the liquidity zone
+// @param zone LiquidityZone object
+// @returns true if price touched the zone
+export method isTouched(LiquidityZone zone) =>
+    if zone.isHigh
+        // Resistance: check if price reached from below
+        high >= zone.price
+    else
+        // Support: check if price reached from above
+        low <= zone.price
+
+// @function Checks if price has touched the confirmation level
+// @param zone LiquidityZone object
+// @param confirmationPrice Confirmation price level
+// @returns true if price touched confirmation level
+export method isConfirmationTouched(LiquidityZone zone, float confirmationPrice) =>
+    if zone.isHigh
+        // Sell liquidity: confirmation below, check downward touch
+        low <= confirmationPrice
+    else
+        // Buy liquidity: confirmation above, check upward touch
+        high >= confirmationPrice
+
+// ============================================================================
+// MANAGER OPERATIONS
+// ============================================================================
+
+// @function Updates all active zones in the manager
+// @param manager LiquidityManager object
+// @returns void
+export method updateAll(LiquidityManager manager) =>
+    if array.size(manager.zones) > 0
+        for i = array.size(manager.zones) - 1 to 0
+            zone = array.get(manager.zones, i)
+            if zone.isActive
+                zone.updateLabelPosition()
+                zone.updateConfirmationLabel()
+
+                // Check if main liquidity line is touched
+                if zone.isTouched()
+                    zone.deactivate()
+                    // Remove from active tracking
+                    array.remove(manager.zones, i)
+
+// @function Gets count of active zones
+// @param manager LiquidityManager object
+// @returns Number of active zones
+export method getActiveCount(LiquidityManager manager) =>
+    array.size(manager.zones)
+
+// @function Removes all zones from manager
+// @param manager LiquidityManager object
+// @returns void
+export method clearAll(LiquidityManager manager) =>
+    if array.size(manager.zones) > 0
+        for zone in manager.zones
+            if not na(zone.line)
+                line.delete(zone.line)
+            if not na(zone.label)
+                label.delete(zone.label)
+            if not na(zone.confirmationLine)
+                line.delete(zone.confirmationLine)
+            if not na(zone.confirmationLabel)
+                label.delete(zone.confirmationLabel)
+        array.clear(manager.zones)

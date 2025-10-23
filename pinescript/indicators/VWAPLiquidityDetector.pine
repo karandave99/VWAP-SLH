@@ -1,0 +1,178 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © VWAP-SLH Project
+
+//@version=6
+indicator("VWAP Liquidity Detector", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ============================================================================
+// LIBRARY IMPORTS
+// ============================================================================
+import USER/ZigZagLib/1 as zz
+import USER/VWAPLib/1 as vwap
+import USER/LiquidityLib/1 as liq
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+// ZigZag Settings
+htfPeriod = input.int(8, "HTF ZigZag Period", minval=2, maxval=50, group="ZigZag")
+ltfPeriod = input.int(2, "LTF ZigZag Period", minval=1, maxval=20, group="ZigZag")
+showHTF = input.bool(true, "Show HTF ZigZag", group="ZigZag")
+showLTF = input.bool(true, "Show LTF ZigZag", group="ZigZag")
+
+// VWAP Settings
+vwapAnchor = input.string("Session", "VWAP Anchor", options=["Session", "Week", "Month"], group="VWAP")
+showVWAP = input.bool(true, "Show VWAP", group="VWAP")
+
+// Liquidity Settings
+maxLiquidityZones = input.int(10, "Max Active Liquidity Zones", minval=1, maxval=50, group="Liquidity")
+
+// Color Settings
+htfUpColor = input.color(color.orange, "HTF Up", group="Colors")
+htfDownColor = input.color(color.orange, "HTF Down", group="Colors")
+ltfUpColor = input.color(color.purple, "LTF Up", group="Colors")
+ltfDownColor = input.color(color.purple, "LTF Down", group="Colors")
+buyLiqColor = input.color(color.green, "Buy Liquidity", group="Colors")
+sellLiqColor = input.color(color.red, "Sell Liquidity", group="Colors")
+
+// ============================================================================
+// VWAP CALCULATION
+// ============================================================================
+vwapValue = vwap.anchoredVWAP(vwapAnchor, close)
+plot(showVWAP ? vwapValue : na, "VWAP", color=color.blue, linewidth=2)
+
+// ============================================================================
+// ZIGZAG INITIALIZATION
+// ============================================================================
+var htfZZ = zz.init(htfPeriod)
+var ltfZZ = zz.init(ltfPeriod)
+
+// ============================================================================
+// LIQUIDITY MANAGER INITIALIZATION
+// ============================================================================
+var liquidityManager = liq.init(maxLiquidityZones)
+
+// ============================================================================
+// UPDATE ZIGZAGS
+// ============================================================================
+htfDirectionChanged = htfZZ.update()
+ltfDirectionChanged = ltfZZ.update()
+
+// ============================================================================
+// DRAW HTF ZIGZAG
+// ============================================================================
+if showHTF and htfDirectionChanged and htfZZ.hasEnoughPivots(2)
+    line.new(
+        x1 = htfZZ.getPreviousBar(),
+        y1 = htfZZ.getPreviousPrice(),
+        x2 = htfZZ.getCurrentBar(),
+        y2 = htfZZ.getCurrentPrice(),
+        color = htfZZ.direction == 1 ? htfUpColor : htfDownColor,
+        width = 2,
+        style = line.style_dashed
+    )
+
+    // Draw HH/LL/LH/HL label
+    pattern = htfZZ.getPattern()
+    if not na(pattern)
+        label.new(
+            x = htfZZ.getCurrentBar(),
+            y = htfZZ.getCurrentPrice(),
+            text = pattern,
+            color = htfZZ.direction == 1 ? htfUpColor : htfDownColor,
+            textcolor = color.white,
+            style = htfZZ.direction == 1 ? label.style_label_down : label.style_label_up,
+            size = size.small
+        )
+
+// ============================================================================
+// DRAW LTF ZIGZAG
+// ============================================================================
+if showLTF and ltfDirectionChanged and ltfZZ.hasEnoughPivots(2)
+    line.new(
+        x1 = ltfZZ.getPreviousBar(),
+        y1 = ltfZZ.getPreviousPrice(),
+        x2 = ltfZZ.getCurrentBar(),
+        y2 = ltfZZ.getCurrentPrice(),
+        color = ltfZZ.direction == 1 ? ltfUpColor : ltfDownColor,
+        width = 1,
+        style = line.style_dotted
+    )
+
+// ============================================================================
+// VWAP CROSS DETECTION & LIQUIDITY ZONE CREATION
+// ============================================================================
+crossUp = vwap.crossAbove(vwapValue)
+crossDown = vwap.crossBelow(vwapValue)
+
+// Create buy liquidity zone on VWAP cross up
+if crossUp and htfZZ.hasEnoughPivots(1)
+    // Get last HTF pivot low
+    lastPivotPrice = na(float)
+    lastPivotBar = na(int)
+
+    // Look for last low pivot
+    if htfZZ.direction == 1  // Currently looking for highs, so last pivot was a low
+        lastPivotPrice := htfZZ.getCurrentPrice()
+        lastPivotBar := htfZZ.getCurrentBar()
+    else if htfZZ.hasEnoughPivots(2)  // Last pivot is high, get previous low
+        lastPivotPrice := htfZZ.getPreviousPrice()
+        lastPivotBar := htfZZ.getPreviousBar()
+
+    if not na(lastPivotPrice) and not na(lastPivotBar)
+        liquidityManager.createZone(lastPivotPrice, bar_index, lastPivotBar, false, "VWAP $$", buyLiqColor)
+
+// Create sell liquidity zone on VWAP cross down
+if crossDown and htfZZ.hasEnoughPivots(1)
+    // Get last HTF pivot high
+    lastPivotPrice = na(float)
+    lastPivotBar = na(int)
+
+    // Look for last high pivot
+    if htfZZ.direction == -1  // Currently looking for lows, so last pivot was a high
+        lastPivotPrice := htfZZ.getCurrentPrice()
+        lastPivotBar := htfZZ.getCurrentBar()
+    else if htfZZ.hasEnoughPivots(2)  // Last pivot is low, get previous high
+        lastPivotPrice := htfZZ.getPreviousPrice()
+        lastPivotBar := htfZZ.getPreviousBar()
+
+    if not na(lastPivotPrice) and not na(lastPivotBar)
+        liquidityManager.createZone(lastPivotPrice, bar_index, lastPivotBar, true, "VWAP $$", sellLiqColor)
+
+// ============================================================================
+// LIQUIDATION CONFIRMATION (LC) DETECTION
+// ============================================================================
+if liquidityManager.getActiveCount() > 0
+    for i = array.size(liquidityManager.zones) - 1 to 0
+        zone = array.get(liquidityManager.zones, i)
+
+        // Only process if no confirmation line exists yet
+        if na(zone.confirmationLine) and ltfDirectionChanged and ltfZZ.hasEnoughPivots(1)
+            // For sell liquidity (isHigh = true): look for LTF pivot low after cross down
+            if zone.isHigh and ltfZZ.direction == -1
+                ltfPivotPrice = ltfZZ.getCurrentPrice()
+                ltfPivotBar = ltfZZ.getCurrentBar()
+
+                // Only add if pivot occurred after zone creation
+                if ltfPivotBar >= zone.startBar
+                    zone.addConfirmation(ltfPivotPrice, ltfPivotBar, "LC", sellLiqColor)
+
+            // For buy liquidity (isHigh = false): look for LTF pivot high after cross up
+            else if not zone.isHigh and ltfZZ.direction == 1
+                ltfPivotPrice = ltfZZ.getCurrentPrice()
+                ltfPivotBar = ltfZZ.getCurrentBar()
+
+                // Only add if pivot occurred after zone creation
+                if ltfPivotBar >= zone.startBar
+                    zone.addConfirmation(ltfPivotPrice, ltfPivotBar, "LC", buyLiqColor)
+
+// ============================================================================
+// UPDATE ALL LIQUIDITY ZONES
+// ============================================================================
+liquidityManager.updateAll()
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+alertcondition(crossUp, "VWAP Cross Up", "Price crossed above VWAP - Buy Liquidity Created")
+alertcondition(crossDown, "VWAP Cross Down", "Price crossed below VWAP - Sell Liquidity Created")

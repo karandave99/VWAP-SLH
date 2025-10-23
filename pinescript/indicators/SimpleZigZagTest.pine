@@ -1,0 +1,64 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © VWAP-SLH Project
+// Simple test indicator to verify ZigZag library works correctly
+
+//@version=6
+indicator("ZigZag Library Test", overlay=true, max_lines_count=100, max_labels_count=100)
+
+// ============================================================================
+// LIBRARY IMPORT
+// ============================================================================
+import USER/ZigZagLib/1 as zz
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+period = input.int(5, "ZigZag Period", minval=1, maxval=50)
+showLines = input.bool(true, "Show ZigZag Lines")
+showLabels = input.bool(true, "Show HH/LL Labels")
+upColor = input.color(color.green, "Up Color")
+downColor = input.color(color.red, "Down Color")
+
+// ============================================================================
+// INITIALIZE ZIGZAG
+// ============================================================================
+var zigzag = zz.init(period)
+
+// ============================================================================
+// UPDATE ZIGZAG
+// ============================================================================
+directionChanged = zigzag.update()
+
+// ============================================================================
+// DRAW ZIGZAG LINES
+// ============================================================================
+if showLines and directionChanged and zigzag.hasEnoughPivots(2)
+    line.new(
+        x1 = zigzag.getPreviousBar(),
+        y1 = zigzag.getPreviousPrice(),
+        x2 = zigzag.getCurrentBar(),
+        y2 = zigzag.getCurrentPrice(),
+        color = zigzag.direction == 1 ? upColor : downColor,
+        width = 2
+    )
+
+// ============================================================================
+// DRAW HH/LL LABELS
+// ============================================================================
+if showLabels and directionChanged and zigzag.hasEnoughPivots(3)
+    pattern = zigzag.getPattern()
+    if not na(pattern)
+        label.new(
+            x = zigzag.getCurrentBar(),
+            y = zigzag.getCurrentPrice(),
+            text = pattern,
+            color = zigzag.direction == 1 ? upColor : downColor,
+            textcolor = color.white,
+            style = zigzag.direction == 1 ? label.style_label_down : label.style_label_up,
+            size = size.small
+        )
+
+// ============================================================================
+// PLOT CURRENT PIVOT (for debugging)
+// ============================================================================
+plot(zigzag.getCurrentPrice(), "Current Pivot", color=color.yellow, style=plot.style_circles, linewidth=3)

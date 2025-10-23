@@ -1,0 +1,130 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © VWAP-SLH Project
+
+//@version=6
+
+// @description Library for VWAP calculations and cross detection
+library("VWAPLib")
+
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
+// @type VWAPData stores VWAP state
+// @field value Current VWAP value
+// @field anchor Time anchor for VWAP calculation
+export type VWAPData
+    float value
+    string anchor
+
+// ============================================================================
+// VWAP CALCULATION
+// ============================================================================
+
+// @function Calculates standard VWAP (resets daily)
+// @returns VWAP value
+export vwap() =>
+    ta.vwap(close)
+
+// @function Calculates VWAP with custom source
+// @param src Source price (default: close)
+// @returns VWAP value
+export vwap(float src) =>
+    ta.vwap(src)
+
+// @function Calculates anchored VWAP
+// @param anchor Time period: "Session", "Week", "Month", "Year"
+// @param src Source price
+// @returns VWAP value
+export anchoredVWAP(string anchor, float src) =>
+    var float sumSrcVol = 0.0
+    var float sumVol = 0.0
+
+    isNewPeriod = switch anchor
+        "Session" => ta.change(time("D"))
+        "Week" => ta.change(time("W"))
+        "Month" => ta.change(time("M"))
+        "Year" => ta.change(time("12M"))
+        => ta.change(time("D"))
+
+    if isNewPeriod
+        sumSrcVol := 0.0
+        sumVol := 0.0
+
+    sumSrcVol += src * volume
+    sumVol += volume
+
+    sumVol != 0 ? sumSrcVol / sumVol : src
+
+// ============================================================================
+// CROSS DETECTION
+// ============================================================================
+
+// @function Detects price crossing above VWAP
+// @param vwapValue VWAP value
+// @param src Source price (default: close)
+// @returns true on crossover
+export crossAbove(float vwapValue, float src = close) =>
+    ta.crossover(src, vwapValue)
+
+// @function Detects price crossing below VWAP
+// @param vwapValue VWAP value
+// @param src Source price (default: close)
+// @returns true on crossunder
+export crossBelow(float vwapValue, float src = close) =>
+    ta.crossunder(src, vwapValue)
+
+// ============================================================================
+// POSITION RELATIVE TO VWAP
+// ============================================================================
+
+// @function Gets price position relative to VWAP
+// @param vwapValue VWAP value
+// @param src Source price
+// @returns 1 if above, -1 if below, 0 if equal
+export position(float vwapValue, float src = close) =>
+    src > vwapValue ? 1 : src < vwapValue ? -1 : 0
+
+// @function Calculates distance from VWAP in percentage
+// @param vwapValue VWAP value
+// @param src Source price
+// @returns Percentage distance (positive if above, negative if below)
+export distancePercent(float vwapValue, float src = close) =>
+    ((src - vwapValue) / vwapValue) * 100
+
+// @function Calculates distance from VWAP in price points
+// @param vwapValue VWAP value
+// @param src Source price
+// @returns Price distance (positive if above, negative if below)
+export distance(float vwapValue, float src = close) =>
+    src - vwapValue
+
+// ============================================================================
+// VWAP BANDS
+// ============================================================================
+
+// @function Calculates VWAP standard deviation bands
+// @param vwapValue VWAP value
+// @param mult Multiplier for standard deviation
+// @returns [upperBand, lowerBand]
+export bands(float vwapValue, float mult = 1.0) =>
+    dev = ta.stdev(close, 20) * mult
+    [vwapValue + dev, vwapValue - dev]
+
+// ============================================================================
+// VWAP MOMENTUM
+// ============================================================================
+
+// @function Checks if VWAP is trending up
+// @param vwapValue VWAP value
+// @param period Lookback period
+// @returns true if VWAP rising
+export isTrendingUp(float vwapValue, int period = 5) =>
+    ta.rising(vwapValue, period)
+
+// @function Checks if VWAP is trending down
+// @param vwapValue VWAP value
+// @param period Lookback period
+// @returns true if VWAP falling
+export isTrendingDown(float vwapValue, int period = 5) =>
+    ta.falling(vwapValue, period)

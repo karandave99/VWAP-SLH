@@ -1,0 +1,180 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © VWAP-SLH Project
+
+//@version=6
+
+// @description Library for detecting ZigZag pivots and managing pivot history
+library("ZigZagLib")
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+int MAX_ARRAY_SIZE = 10 // Store last 5 pivots [price, bar] pairs
+
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
+// @type ZigZagData stores the state of a zigzag calculation
+// @field pivots Array storing [price, bar_index] pairs
+// @field direction Current direction: 1 for up (looking for high), -1 for down (looking for low)
+// @field period Lookback period for pivot detection
+export type ZigZagData
+    array<float> pivots
+    int direction
+    int period
+
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
+
+// @function Creates a new ZigZag data structure
+// @param period Lookback period for pivot detection
+// @returns ZigZagData object
+export method init(int period) =>
+    ZigZagData.new(
+        pivots = array.new<float>(0),
+        direction = 0,
+        period = period
+    )
+
+// ============================================================================
+// PIVOT DETECTION
+// ============================================================================
+
+// @function Detects if current bar is a pivot high
+// @param period Lookback period
+// @returns Price if pivot high detected, na otherwise
+export pivotHigh(int period) =>
+    ta.highestbars(high, period) == 0 ? high : na
+
+// @function Detects if current bar is a pivot low
+// @param period Lookback period
+// @returns Price if pivot low detected, na otherwise
+export pivotLow(int period) =>
+    ta.lowestbars(low, period) == 0 ? low : na
+
+// ============================================================================
+// ZIGZAG MANAGEMENT
+// ============================================================================
+
+// @function Adds a new pivot to the zigzag array
+// @param zz ZigZagData object
+// @param value Pivot price
+// @param barIndex Bar index of the pivot
+// @returns void
+method addPivot(ZigZagData zz, float value, int barIndex) =>
+    array.unshift(zz.pivots, barIndex)
+    array.unshift(zz.pivots, value)
+    if array.size(zz.pivots) > MAX_ARRAY_SIZE
+        array.pop(zz.pivots)
+        array.pop(zz.pivots)
+
+// @function Updates the current pivot if a better one is found
+// @param zz ZigZagData object
+// @param value New pivot price
+// @param barIndex Bar index of the new pivot
+// @returns void
+method updatePivot(ZigZagData zz, float value, int barIndex) =>
+    if array.size(zz.pivots) == 0
+        zz.addPivot(value, barIndex)
+    else
+        // Update if higher high or lower low
+        shouldUpdate = (zz.direction == 1 and value > array.get(zz.pivots, 0)) or
+                       (zz.direction == -1 and value < array.get(zz.pivots, 0))
+        if shouldUpdate
+            array.set(zz.pivots, 0, value)
+            array.set(zz.pivots, 1, barIndex)
+
+// @function Updates zigzag based on current bar
+// @param zz ZigZagData object
+// @returns true if direction changed (new pivot leg started)
+export method update(ZigZagData zz) =>
+    float ph = pivotHigh(zz.period)
+    float pl = pivotLow(zz.period)
+
+    // Update direction
+    oldDirection = zz.direction
+    zz.direction := not na(ph) and na(pl) ? 1 : not na(pl) and na(ph) ? -1 : zz.direction
+
+    directionChanged = ta.change(zz.direction) != 0
+
+    // Process pivot
+    if not na(ph) or not na(pl)
+        pivotValue = not na(ph) ? ph : pl
+        if directionChanged
+            zz.addPivot(pivotValue, bar_index)
+        else
+            zz.updatePivot(pivotValue, bar_index)
+
+    directionChanged
+
+// ============================================================================
+// PIVOT ACCESSORS
+// ============================================================================
+
+// @function Gets the most recent pivot price
+// @param zz ZigZagData object
+// @returns Current pivot price or na
+export method getCurrentPrice(ZigZagData zz) =>
+    array.size(zz.pivots) >= 2 ? array.get(zz.pivots, 0) : na
+
+// @function Gets the most recent pivot bar index
+// @param zz ZigZagData object
+// @returns Current pivot bar index or na
+export method getCurrentBar(ZigZagData zz) =>
+    array.size(zz.pivots) >= 2 ? int(array.get(zz.pivots, 1)) : na
+
+// @function Gets the previous pivot price
+// @param zz ZigZagData object
+// @returns Previous pivot price or na
+export method getPreviousPrice(ZigZagData zz) =>
+    array.size(zz.pivots) >= 4 ? array.get(zz.pivots, 2) : na
+
+// @function Gets the previous pivot bar index
+// @param zz ZigZagData object
+// @returns Previous pivot bar index or na
+export method getPreviousBar(ZigZagData zz) =>
+    array.size(zz.pivots) >= 4 ? int(array.get(zz.pivots, 3)) : na
+
+// @function Gets pivot price at specific index (0 = current, 1 = previous, etc.)
+// @param zz ZigZagData object
+// @param index Pivot index
+// @returns Pivot price or na
+export method getPivotPrice(ZigZagData zz, int index) =>
+    arrayIndex = index * 2
+    array.size(zz.pivots) > arrayIndex ? array.get(zz.pivots, arrayIndex) : na
+
+// @function Gets pivot bar at specific index (0 = current, 1 = previous, etc.)
+// @param zz ZigZagData object
+// @param index Pivot index
+// @returns Pivot bar index or na
+export method getPivotBar(ZigZagData zz, int index) =>
+    arrayIndex = index * 2 + 1
+    array.size(zz.pivots) > arrayIndex ? int(array.get(zz.pivots, arrayIndex)) : na
+
+// ============================================================================
+// PATTERN DETECTION
+// ============================================================================
+
+// @function Detects Higher High / Lower High / Lower Low / Higher Low
+// @param zz ZigZagData object
+// @returns String: "HH", "LL", "LH", "HL" or na
+export method getPattern(ZigZagData zz) =>
+    if array.size(zz.pivots) >= 6
+        currentPrice = zz.getPivotPrice(0)
+        prevSameTypePrice = zz.getPivotPrice(2)
+
+        if zz.direction == 1  // Current is a high
+            currentPrice > prevSameTypePrice ? "HH" : "LH"
+        else  // Current is a low
+            currentPrice < prevSameTypePrice ? "LL" : "HL"
+    else
+        na
+
+// @function Checks if zigzag has minimum required pivots
+// @param zz ZigZagData object
+// @param minPivots Minimum number of pivots required
+// @returns true if enough pivots exist
+export method hasEnoughPivots(ZigZagData zz, int minPivots = 3) =>
+    array.size(zz.pivots) >= minPivots * 2

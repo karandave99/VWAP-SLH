@@ -1,0 +1,197 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © VWAP-SLH Project
+// Standalone ZigZag Indicator - No libraries required
+// Based on LonesomeTheBlue's double zigzag logic
+
+//@version=6
+indicator("ZigZag Standalone Test", overlay=true, max_lines_count=100, max_labels_count=100)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+period = input.int(8, "ZigZag Period", minval=2, maxval=50, group="Settings")
+showLines = input.bool(true, "Show ZigZag Lines", group="Display")
+showLabels = input.bool(true, "Show HH/LL Labels", group="Display")
+showPivotMarkers = input.bool(true, "Show Pivot Markers", group="Display")
+
+upColor = input.color(color.green, "Up Color", group="Colors")
+downColor = input.color(color.red, "Down Color", group="Colors")
+textColor = input.color(color.white, "Text Color", group="Colors")
+
+// ============================================================================
+// PIVOT DETECTION
+// ============================================================================
+
+// Detect pivot high: current bar has highest high in the period
+float ph = ta.highestbars(high, period) == 0 ? high : na
+
+// Detect pivot low: current bar has lowest low in the period
+float pl = ta.lowestbars(low, period) == 0 ? low : na
+
+// ============================================================================
+// DIRECTION TRACKING
+// ============================================================================
+
+// Direction: 1 = looking for highs (last pivot was low), -1 = looking for lows (last pivot was high)
+var int direction = 0
+
+// Update direction based on pivots found
+direction := not na(ph) and na(pl) ? 1 : not na(pl) and na(ph) ? -1 : direction
+
+// ============================================================================
+// PIVOT STORAGE IN ARRAY
+// ============================================================================
+
+// Array stores [price, bar_index] pairs for last 5 pivots (10 elements total)
+var int MAX_ARRAY_SIZE = 10
+var array<float> zigzag = array.new<float>(0)
+var array<float> oldZigzag = array.new<float>(0)
+
+// Make a copy to detect changes
+oldZigzag := array.copy(zigzag)
+
+// ============================================================================
+// PIVOT MANAGEMENT FUNCTIONS
+// ============================================================================
+
+// Add new pivot to beginning of array
+addPivot(float value, int barIndex) =>
+    array.unshift(zigzag, barIndex)
+    array.unshift(zigzag, value)
+    // Remove oldest if array too large
+    if array.size(zigzag) > MAX_ARRAY_SIZE
+        array.pop(zigzag)
+        array.pop(zigzag)
+
+// Update current pivot if better one found
+updatePivot(float value, int barIndex) =>
+    if array.size(zigzag) == 0
+        addPivot(value, barIndex)
+    else
+        // Update if higher high or lower low
+        if (direction == 1 and value > array.get(zigzag, 0)) or (direction == -1 and value < array.get(zigzag, 0))
+            array.set(zigzag, 0, value)
+            array.set(zigzag, 1, barIndex)
+
+// ============================================================================
+// UPDATE ZIGZAG ON EACH BAR
+// ============================================================================
+
+directionChanged = ta.change(direction) != 0
+
+// Process pivot points
+if not na(ph) or not na(pl)
+    pivotValue = not na(ph) ? ph : pl
+
+    if directionChanged
+        // Direction changed: add new pivot (new leg)
+        addPivot(pivotValue, bar_index)
+    else
+        // Same direction: update if better pivot
+        updatePivot(pivotValue, bar_index)
+
+// ============================================================================
+// DRAW ZIGZAG LINES
+// ============================================================================
+
+if showLines and array.size(zigzag) >= 6
+    // Check if current pivot changed
+    if array.get(zigzag, 0) != array.get(oldZigzag, 0) or array.get(zigzag, 1) != array.get(oldZigzag, 1)
+        // Draw line from previous pivot to current pivot
+        line.new(
+            x1 = int(array.get(zigzag, 3)),      // Previous pivot bar
+            y1 = array.get(zigzag, 2),           // Previous pivot price
+            x2 = int(array.get(zigzag, 1)),      // Current pivot bar
+            y2 = array.get(zigzag, 0),           // Current pivot price
+            color = direction == 1 ? upColor : downColor,
+            width = 2
+        )
+
+// ============================================================================
+// DRAW HH/LL/LH/HL LABELS
+// ============================================================================
+
+if showLabels and array.size(zigzag) >= 6
+    // Check if current pivot changed
+    if array.get(zigzag, 0) != array.get(oldZigzag, 0) or array.get(zigzag, 1) != array.get(oldZigzag, 1)
+        // Compare current pivot to previous pivot of same type (2 pivots back)
+        currentPrice = array.get(zigzag, 0)
+        previousSameTypePrice = array.get(zigzag, 4)
+
+        // Determine pattern
+        labelText = ""
+        labelColor = color.gray
+
+        if direction == 1  // Current pivot is a high
+            if currentPrice > previousSameTypePrice
+                labelText := "HH"  // Higher High
+                labelColor := upColor
+            else
+                labelText := "LH"  // Lower High
+                labelColor := downColor
+        else  // Current pivot is a low
+            if currentPrice < previousSameTypePrice
+                labelText := "LL"  // Lower Low
+                labelColor := downColor
+            else
+                labelText := "HL"  // Higher Low
+                labelColor := upColor
+
+        // Draw label at current pivot
+        label.new(
+            x = int(array.get(zigzag, 1)),
+            y = array.get(zigzag, 0),
+            text = labelText,
+            color = labelColor,
+            textcolor = textColor,
+            style = direction == 1 ? label.style_label_down : label.style_label_up,
+            size = size.normal
+        )
+
+// ============================================================================
+// SHOW PIVOT MARKERS (for debugging)
+// ============================================================================
+
+if showPivotMarkers
+    // Mark detected pivot highs
+    plotshape(ph, "Pivot High", shape.triangledown, location.abovebar, color.new(upColor, 30), size=size.small)
+
+    // Mark detected pivot lows
+    plotshape(pl, "Pivot Low", shape.triangleup, location.belowbar, color.new(downColor, 30), size=size.small)
+
+// ============================================================================
+// INFO TABLE (Shows current state)
+// ============================================================================
+
+var table infoTable = table.new(position.top_right, 2, 4, border_width=1)
+
+if barstate.islast
+    // Clear table
+    table.clear(infoTable, 0, 0, 1, 3)
+
+    // Header
+    table.cell(infoTable, 0, 0, "ZigZag Info", bgcolor=color.gray, text_color=color.white)
+    table.cell(infoTable, 1, 0, "", bgcolor=color.gray)
+
+    // Direction
+    dirText = direction == 1 ? "UP (Looking for Highs)" : direction == -1 ? "DOWN (Looking for Lows)" : "NEUTRAL"
+    table.cell(infoTable, 0, 1, "Direction", text_color=color.gray)
+    table.cell(infoTable, 1, 1, dirText, text_color=direction == 1 ? upColor : downColor)
+
+    // Pivot count
+    pivotCount = str.tostring(array.size(zigzag) / 2)
+    table.cell(infoTable, 0, 2, "Pivots Stored", text_color=color.gray)
+    table.cell(infoTable, 1, 2, pivotCount, text_color=color.white)
+
+    // Current pivot
+    if array.size(zigzag) >= 2
+        currentPivotPrice = str.tostring(array.get(zigzag, 0), format.mintick)
+        table.cell(infoTable, 0, 3, "Current Pivot", text_color=color.gray)
+        table.cell(infoTable, 1, 3, currentPivotPrice, text_color=color.white)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+alertcondition(directionChanged and direction == 1, "Pivot Low Formed", "New pivot low formed - Trend may reverse up")
+alertcondition(directionChanged and direction == -1, "Pivot High Formed", "New pivot high formed - Trend may reverse down")
